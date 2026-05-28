@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+var maxRetryCount = 3
+
 type Job struct {
 	JobId     int
 	RestryCnt int
@@ -18,6 +20,15 @@ type Queue struct {
 	Dlq        chan Job
 }
 
+func (q *Queue) handleRetry(job Job) {
+	if job.RestryCnt >= maxRetryCount {
+		q.Dlq <- job
+	} else {
+		job.RestryCnt++
+		q.RetryQueue <- job
+	}
+}
+
 func (q *Queue) worker(workerNum int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range q.Jobs {
@@ -26,7 +37,7 @@ func (q *Queue) worker(workerNum int, wg *sync.WaitGroup) {
 			err = errors.New("random failure")
 		}
 		if err != nil {
-			fmt.Println("random failure")
+			q.handleRetry(job)
 		} else {
 			fmt.Println("Working on job", job.JobId, "by worker", workerNum)
 		}
@@ -55,6 +66,7 @@ func main() {
 			JobId: i + 1,
 		}
 	}
+
 	close(queues.Jobs)
 	wg.Wait()
 }
