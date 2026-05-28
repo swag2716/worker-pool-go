@@ -1,18 +1,35 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 )
 
 type Job struct {
-	JobId int
+	JobId     int
+	RestryCnt int
 }
 
-func worker(workerNum int, jobs chan Job, wg *sync.WaitGroup) {
+type Queue struct {
+	Jobs       chan Job
+	RetryQueue chan Job
+	Dlq        chan Job
+}
+
+func (q *Queue) worker(workerNum int, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for job := range jobs {
-		fmt.Println("Working on job", job.JobId, "by worker", workerNum)
+	for job := range q.Jobs {
+		var err error
+		if rand.Intn(3) == 0 {
+			err = errors.New("random failure")
+		}
+		if err != nil {
+			fmt.Println("random failure")
+		} else {
+			fmt.Println("Working on job", job.JobId, "by worker", workerNum)
+		}
 	}
 }
 
@@ -20,19 +37,24 @@ func main() {
 	numJobs := 10
 	numWorkers := 3
 
-	jobs := make(chan Job, numJobs)
+	queues := Queue{
+		Jobs:       make(chan Job, numJobs),
+		RetryQueue: make(chan Job, numJobs),
+		Dlq:        make(chan Job, numJobs),
+	}
+
 	var wg sync.WaitGroup
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go worker(i, jobs, &wg)
+		go queues.worker(i, &wg)
 	}
 
 	for i := 0; i < numJobs; i++ {
-		jobs <- Job{
+		queues.Jobs <- Job{
 			JobId: i + 1,
 		}
 	}
-	close(jobs)
+	close(queues.Jobs)
 	wg.Wait()
 }
