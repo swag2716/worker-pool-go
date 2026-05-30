@@ -18,14 +18,22 @@ type Queue struct {
 	Jobs       chan Job
 	RetryQueue chan Job
 	Dlq        chan Job
+	JobWg      sync.WaitGroup
 }
 
 func (q *Queue) handleRetry(job Job) {
 	if job.RestryCnt >= maxRetryCount {
 		q.Dlq <- job
+		q.JobWg.Done()
 	} else {
 		job.RestryCnt++
 		q.RetryQueue <- job
+	}
+}
+
+func (q *Queue) exponentialRetryMechanism() {
+	for job := range q.RetryQueue {
+		q.Jobs <- job
 	}
 }
 
@@ -37,9 +45,11 @@ func (q *Queue) worker(workerNum int, wg *sync.WaitGroup) {
 			err = errors.New("random failure")
 		}
 		if err != nil {
+			fmt.Println("Job failed", job.JobId, "by worker", workerNum)
 			q.handleRetry(job)
 		} else {
 			fmt.Println("Working on job", job.JobId, "by worker", workerNum)
+			q.JobWg.Done()
 		}
 	}
 }
@@ -54,19 +64,25 @@ func main() {
 		Dlq:        make(chan Job, numJobs),
 	}
 
-	var wg sync.WaitGroup
+	var workerWg sync.WaitGroup
 
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go queues.worker(i, &wg)
+		workerWg.Add(1)
+		go queues.worker(i, &workerWg)
 	}
 
 	for i := 0; i < numJobs; i++ {
+		queues.JobWg.Add(1)
 		queues.Jobs <- Job{
 			JobId: i + 1,
 		}
 	}
+	go queues.exponentialRetryMechanism()
 
-	close(queues.Jobs)
-	wg.Wait()
+	go func() {
+		queues.JobWg.Wait()
+		close(queues.Jobs)
+	}()
+
+	workerWg.Wait()
 }
